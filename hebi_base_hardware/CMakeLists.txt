@@ -92,7 +92,7 @@ install(TARGETS hebi_base_diff_drive_node
 install(DIRECTORY include/${PROJECT_NAME}/
   DESTINATION ${CATKIN_PACKAGE_INCLUDE_DESTINATION})
 
-install(DIRECTORY launch config
+install(DIRECTORY launch
   DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION})
 
 
