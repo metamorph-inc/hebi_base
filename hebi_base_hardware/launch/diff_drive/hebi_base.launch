@@ -1,6 +1,9 @@
 <?xml version="1.0"?>
 
 <launch>
+    <!-- these are the arguments you can pass this launch file, for example control:=false -->
+    <arg name="control" default="true"/>
+    <arg name="teleop" default="true"/>
 
     <!-- HEBI Base Hardware Node -->
     <node pkg="hebi_base_hardware" type="hebi_base_diff_drive_node" name="hebi_diff_drive_base" output="screen">
@@ -22,10 +25,14 @@
         </rosparam>
     </node>
 
-    <!-- Differential controller parameters and basic localization -->
-    <include file="$(find hebi_base_control)/launch/diff_drive/control.launch" />
+    <group if="$(arg control)">
+        <!-- Differential controller parameters and basic localization -->
+        <include file="$(find hebi_base_control)/launch/diff_drive/control.launch" />
+    </group>
 
-    <!--Teleop -->
-    <include file="$(find hebi_base_control)/launch/diff_drive/teleop.launch" />
+    <group if="$(arg teleop)">
+        <!--Teleop -->
+        <include file="$(find hebi_base_control)/launch/diff_drive/teleop.launch" />
+    </group>
 
 </launch>
