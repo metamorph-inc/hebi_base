@@ -1,0 +1,31 @@
+<?xml version="1.0"?>
+
+<launch>
+
+    <!-- HEBI Base Hardware Node -->
+    <node pkg="hebi_base_hardware" type="hebi_base_diff_drive_node" name="hebi_diff_drive_base" output="screen">
+        <rosparam subst_value="true">
+
+            control_frequency: 10.0
+
+            max_acceleration: 4.0
+            max_speed: 9.0
+            wheel_diameter: 0.2032
+            polling_timeout: 10.0
+            hebi_gains_fname: $(find hebi_base_hardware)/gains/diff_drive/x8_3.xml
+
+            hebi_mapping_front_left_wheel:  "DiffDriveBase/FrontLeft"
+            hebi_mapping_front_right_wheel: "DiffDriveBase/FrontRight"
+            hebi_mapping_rear_left_wheel:   "DiffDriveBase/RearLeft"
+            hebi_mapping_rear_right_wheel:  "DiffDriveBase/RearRight"
+
+        </rosparam>
+    </node>
+
+    <!-- Differential controller parameters and basic localization -->
+    <include file="$(find hebi_base_control)/launch/diff_drive/control.launch" />
+
+    <!--Teleop -->
+    <include file="$(find hebi_base_control)/launch/diff_drive/teleop.launch" />
+
+</launch>
