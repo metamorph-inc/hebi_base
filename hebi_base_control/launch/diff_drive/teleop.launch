@@ -4,13 +4,17 @@
   <arg name="joy_dev" default="$(optenv HEBI_BASE_JOY_DEVICE /dev/input/js0)" />
   <arg name="joystick" default="true" />
 
-  <group ns="joy_teleop">
+  <group>
 
     <rosparam command="load" file="$(find hebi_base_control)/config/diff_drive/teleop_xbox_one.yaml" />
 
-    <node pkg="joy" type="joy_node" name="joy_node" />
+    <group if="$(arg joystick)">
+      <node pkg="joy" type="joy_node" name="joy_node" />
+    </group>
 
-    <node pkg="teleop_twist_joy" type="teleop_node" name="teleop_twist_joy"/>
+    <node pkg="teleop_twist_joy" type="teleop_node" name="teleop_twist_joy">
+      <remap from="cmd_vel" to="hebi_base/cmd_vel" />
+    </node>
 
   </group>
 
