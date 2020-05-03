@@ -17,7 +17,7 @@ find_package(catkin REQUIRED COMPONENTS
   roscpp
   sensor_msgs
   roslaunch
-  hebi_cpp_api
+  hebiros
 )
 
 ## System dependencies are found with CMake's conventions
@@ -55,7 +55,7 @@ catkin_package(
     hebi_base_control 
     roscpp 
     sensor_msgs
-    hebi_cpp_api
+    hebiros
   DEPENDS Boost
 )
 

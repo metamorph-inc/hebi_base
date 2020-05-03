@@ -5,11 +5,9 @@
 #include <boost/algorithm/string.hpp> 
 #include <thread>
 #include "Eigen/Dense"
-#include "hebi_cpp_api/lookup.hpp"
-#include "hebi_cpp_api/group.hpp"
-#include "hebi_cpp_api/group_command.hpp"
-#include "hebi_cpp_api/group_feedback.hpp"
-#include "hebi_cpp_api/trajectory.hpp"
+#include "hebiros/AddGroupFromNamesSrv.h"
+#include "hebiros/SendCommandWithAcknowledgementSrv.h"
+#include "hebiros/CommandMsg.h"
 
 namespace
 {
@@ -23,9 +21,10 @@ namespace hebi_base_diff_drive_hardware
   HebiBaseDiffDriveHardware::HebiBaseDiffDriveHardware(ros::NodeHandle nh, ros::NodeHandle private_nh, double target_control_freq)
     :
     nh_(nh),
-    private_nh_(private_nh)
-    //hebi_feedback_(NUM_WHEELS),
-    //hebi_command_(NUM_WHEELS)
+    private_nh_(private_nh),
+    feedback_received_(false),
+    offset_calculated_(false),
+    cmd_velocities_(NUM_WHEELS)
   {;
     std::string hebi_gains_fname;
     private_nh_.param<double>("wheel_diameter", wheel_diameter_, 0.2032);
@@ -68,45 +67,43 @@ namespace hebi_base_diff_drive_hardware
       ROS_INFO("%s: %s/%s", hebi_mapping_param_names[i].c_str(), hebi_families[i].c_str(), hebi_names[i].c_str());
     }
 
-    hebi::Lookup lookup;
-    std::this_thread::sleep_for(std::chrono::seconds(1));
-    printHebiLookup(lookup);
-    hebi_group_ = lookup.getGroupFromNames(hebi_families, hebi_names, 10000);
-    if (!hebi_group_) {
-      ROS_ERROR("HEBI Group not found...");
-      // do nothing... for now;
-    }
-    
-    // Set HEBI Gains from file
-    hebi::GroupCommand base_gains_command(hebi_group_->size());
-    if (!base_gains_command.readGains(hebi_gains_fname)) {
-      ROS_WARN("Could not read %s", hebi_gains_fname.c_str());
-    } else {
-      if (!hebi_group_->sendCommandWithAcknowledgement(base_gains_command)) {
-        ROS_WARN("Could not send gains");
-      }
-    }
+    hebi_group_name_ = "hebi_base";
 
-    constexpr double feedback_frequency = 100;
-    hebi_group_->setFeedbackFrequencyHz(feedback_frequency);
-    hebi_feedback_ = std::make_shared<hebi::GroupFeedback>(hebi_group_->size());
-    constexpr long command_lifetime = 250;
-    hebi_group_->setCommandLifetimeMs(command_lifetime);
-    hebi_command_ = std::make_shared<hebi::GroupCommand>(hebi_group_->size());
-    cmd_vel_vector_ = Eigen::VectorXd(hebi_group_->size());
-    cmd_vel_vector_.setZero();
+    //Create a client which uses the service to create a group
+    ros::ServiceClient add_group_client = nh_.serviceClient<hebiros::AddGroupFromNamesSrv>(
+      "/hebiros/add_group_from_names");
 
-    // Try to get feedback -- if we don't get a packet in the first N times,
-    // something is wrong
-    int num_attempts = 0;
-    while (!hebi_group_->getNextFeedback(*hebi_feedback_)) {
-      if (num_attempts++ > 20) {
-        ROS_ERROR("Unable to get HEBI Group Feedback after %s attempts...", std::to_string(num_attempts).c_str());
-       // do nothing... for now;
-      }
-    }
+    ros::ServiceClient send_command_with_acknowledgement = nh_.serviceClient<hebiros::SendCommandWithAcknowledgementSrv>(
+      "/hebiros/"+hebi_group_name_+"/send_command_with_acknowledgement");
 
-    resetTravelOffset();
+    //Create a subscriber to receive feedback from a group
+    //Register feedback_callback as a callback which runs when feedback is received
+    feedback_subscriber_ = nh_.subscribe<sensor_msgs::JointState>(
+      "/hebiros/"+hebi_group_name_+"/feedback/joint_state", 100, &HebiBaseDiffDriveHardware::feedbackCallback, this);
+
+    //Create a publisher to send desired commands to a group
+    hebi_publisher_ = nh_.advertise<sensor_msgs::JointState>(
+      "/hebiros/"+hebi_group_name_+"/command/joint_state", 100);
+
+    cmd_msg_.name = hebi_mapping;
+
+    hebiros::AddGroupFromNamesSrv add_group_srv;
+    add_group_srv.request.group_name = hebi_group_name_;
+    add_group_srv.request.families = hebi_families;
+    add_group_srv.request.names = hebi_names;
+    while(!add_group_client.call(add_group_srv)) {}
+
+    hebiros::SendCommandWithAcknowledgementSrv send_cmd_w_ack_srv;
+    send_cmd_w_ack_srv.request.command.name = hebi_mapping;
+    send_cmd_w_ack_srv.request.command.settings.name = hebi_mapping;
+    send_cmd_w_ack_srv.request.command.settings.control_strategy = {4, 4, 4, 4};
+    send_cmd_w_ack_srv.request.command.settings.position_gains.kp = {3, 3, 3, 3};
+    send_cmd_w_ack_srv.request.command.settings.velocity_gains.kp = {0.3, 0.3, 0.3, 0.3};
+    send_cmd_w_ack_srv.request.command.settings.velocity_gains.feed_forward = {1, 1, 1, 1};
+    send_cmd_w_ack_srv.request.command.settings.velocity_gains.max_target = {9.617128, 9.617128, 9.617128, 9.617128};
+    send_cmd_w_ack_srv.request.command.settings.velocity_gains.min_target = {-9.617128, -9.617128, -9.617128, -9.617128};
+    send_command_with_acknowledgement.call(send_cmd_w_ack_srv);
+
     registerControlInterfaces();
   }
 
@@ -132,37 +129,14 @@ namespace hebi_base_diff_drive_hardware
   }
 
   /**
-   * Print HEBI module lookup to screen
-   */
-  void HebiBaseDiffDriveHardware::printHebiLookup(hebi::Lookup &hebi_lookup)
-  {
-    // Take snapshot and print to the screen
-    auto entry_list = hebi_lookup.getEntryList();
-    ROS_INFO("Modules found on network (Family | Name):");
-    for (auto entry : *entry_list)
-    {
-      ROS_INFO("%s | %s", entry.family_.c_str(), entry.name_.c_str());
-    }
-  }
-
-  /**
   * Get current HEBI actuator position offsets and bias future readings against them
   */
   void HebiBaseDiffDriveHardware::resetTravelOffset()
   {
-    // Fill in feedback
-    if (hebi_group_->getNextFeedback(*hebi_feedback_))
+    // Retrieve current positions
+    for (int i = 0; i < NUM_WHEELS; i++)
     {
-      // Retrieve current positions
-      hebi_positions_ = hebi_feedback_->getPosition();
-      for (int i = 0; i < NUM_WHEELS; i++)
-      {
-        joints_[i].position_offset = hebi_positions_[i];
-      }
-    }
-    else
-    {
-      ROS_ERROR("Could not get HEBI feedback data to calibrate travel offset");
+      joints_[i].position_offset = fbk_positions_[i];
     }
   }
 
@@ -193,21 +167,17 @@ namespace hebi_base_diff_drive_hardware
   */
   void HebiBaseDiffDriveHardware::updateJointsFromHardware()
   {
-    // Fill in feedback
-    bool feedback_received = false;
-    if (hebi_group_->getNextFeedback(*hebi_feedback_))
+    if (feedback_received_)
     {
-      feedback_received = true;
-    } else {
-      feedback_received = false;
-    }
+      if (!offset_calculated_)
+      {
+        resetTravelOffset();
+        offset_calculated_ = true;
+      }
 
-    if (feedback_received)
-    {
-      hebi_positions_ = hebi_feedback_->getPosition();
       for (int i = 0; i < NUM_WHEELS; i++)
       {
-        double delta = hebi_positions_[i] - joints_[i].position - joints_[i].position_offset;
+        double delta = fbk_positions_[i] - joints_[i].position - joints_[i].position_offset;
 
         // detect suspiciously large readings, possibly from encoder rollover
         if (std::abs(delta) < 1.0)
@@ -222,23 +192,22 @@ namespace hebi_base_diff_drive_hardware
         }
       }
     }
-;
-    if (feedback_received)
+
+    if (feedback_received_)
     {
-      hebi_velocities_ = hebi_feedback_->getVelocity();
       for (int i = 0; i < NUM_WHEELS; i++)
       {
         if (i % 2 == LEFT)
         {
-          joints_[i].velocity = hebi_velocities_[i];  // FIXME: May need to flip sign if ros_control doesn't know about axis
+          joints_[i].velocity = fbk_velocities_[i];  // FIXME: May need to flip sign if ros_control doesn't know about axis
         }
         else
         { // assume RIGHT
-          joints_[i].velocity = hebi_velocities_[i];
+          joints_[i].velocity = fbk_velocities_[i];
         }
       }
     }
-  }
+}
 
   /**
   * Get latest velocity commands from ros_control via joint structure, and send to MCU
@@ -252,16 +221,15 @@ namespace hebi_base_diff_drive_hardware
     {
       if (i % 2 == LEFT)
       {
-        cmd_vel_vector_[i] = diff_speed_left;
+        cmd_velocities_[i] = diff_speed_left;
       }
       else
       { // assume RIGHT
-        cmd_vel_vector_[i] = diff_speed_right;
+        cmd_velocities_[i] = diff_speed_right;
       }
     }
-
-    hebi_command_->setVelocity(cmd_vel_vector_);
-    hebi_group_->sendCommand(*hebi_command_);
+    cmd_msg_.velocity = cmd_velocities_;
+    hebi_publisher_.publish(cmd_msg_);
   }
 
   /**
@@ -294,5 +262,13 @@ namespace hebi_base_diff_drive_hardware
     return angle * wheel_diameter_ / 2.0;
   }
 
+  /**
+  * Callback
+  */
+  void HebiBaseDiffDriveHardware::feedbackCallback(const sensor_msgs::JointState::ConstPtr& data) {
+    fbk_positions_ = data->position;
+    fbk_velocities_ = data->velocity;
+    feedback_received_ = true;
+  }
 
 }  // namespace hebi_base_diff_drive_hardware

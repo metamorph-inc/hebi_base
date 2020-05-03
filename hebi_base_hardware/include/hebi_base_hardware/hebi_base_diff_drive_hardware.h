@@ -10,8 +10,6 @@
 #include "hardware_interface/joint_state_interface.h"
 #include "hardware_interface/joint_command_interface.h"
 #include "hardware_interface/robot_hw.h"
-#include "hebi_cpp_api/lookup.hpp"
-#include "hebi_cpp_api/group.hpp"
 
 namespace hebi_base_diff_drive_hardware
 {
@@ -36,8 +34,6 @@ namespace hebi_base_diff_drive_hardware
 
       std::vector<std::string> getHebiFamilyNameFromParam(const std::string &param_name, const std::string &param_default_value);
 
-      void printHebiLookup(hebi::Lookup &hebi_lookup);
-
       std::string eigenToString(const Eigen::MatrixXd& mat);
 
       double linearToAngular(const double &travel) const;
@@ -45,6 +41,8 @@ namespace hebi_base_diff_drive_hardware
       double angularToLinear(const double &angle) const;
 
       void limitDifferentialSpeed(double &travel_speed_left, double &travel_speed_right);
+
+      void feedbackCallback(const sensor_msgs::JointState::ConstPtr& data);
 
       ros::NodeHandle nh_, private_nh_;
 
@@ -61,18 +59,19 @@ namespace hebi_base_diff_drive_hardware
       double polling_timeout_;
 
       // HEBI
-      std::shared_ptr<hebi::Group> hebi_group_;
+      std::string hebi_group_name_;
 
       // HEBI Feedback
-      std::shared_ptr<hebi::GroupFeedback> hebi_feedback_;
-      // hebi::GroupFeedback hebi_feedback_;
-      Eigen::VectorXd hebi_positions_;
-      Eigen::VectorXd hebi_velocities_;
+      ros::Subscriber feedback_subscriber_;
+      bool feedback_received_;
+      bool offset_calculated_;
+      std::vector<double> fbk_positions_;
+      std::vector<double> fbk_velocities_;
 
       // HEBI Command
-      std::shared_ptr<hebi::GroupCommand> hebi_command_;
-      // hebi::GroupCommand hebi_command_;
-      Eigen::VectorXd cmd_vel_vector_;
+      ros::Publisher hebi_publisher_;
+      std::vector<double> cmd_velocities_;
+      sensor_msgs::JointState cmd_msg_;
 
       /**
       * Joint structure that is hooked to ros_control's InterfaceManager, to allow control via diff_drive_controller
